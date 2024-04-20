@@ -8,6 +8,7 @@ from torch.nn.functional import silu
 from torch.nn.functional import softplus
 
 from utils import default
+from utils import RMSNorm
 
 class Mamba(nn.Module):
     '''
@@ -18,8 +19,54 @@ class Mamba(nn.Module):
     scales) while being much more compute efficient.
     '''
     
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        num_layers : int,
+        d_input : int,
+        d_model : int,
+        d_state : int = 16,
+        d_discr : int | None = None,
+        ker_size : int = 4,
+        parallel : bool = False,
+    ) -> None:
+        super().__init__()
+        
+        mamba_par = {
+            'd_input' : d_input,
+            'd_model' : d_model,
+            'd_state' : d_state,
+            'd_discr' : d_discr,
+            'ker_size': ker_size,
+            'parallel': parallel,
+        }
+        
+        # A Mamba model is composed of a series of MambaBlocks interleaved
+        # with normalization layers (e.g. RMSNorm)
+        self.layers = nn.ModuleList([
+            (
+                MambaBlock(**mamba_par),
+                RMSNorm(d_model)
+            )
+            for _ in range(num_layers)
+        ])
+        
+    def forward(self, seq : Tensor) -> Tensor:
+        '''
+        Forward pass of the Mamba model.
+        
+        Args:
+            seq (Tensor): Input sequence of shape (batch_size, seq_len, d_seq).
+            
+        Returns:
+            Tensor: Output sequence of shape (batch_size, seq_len, d_seq).
+        '''
+        
+        for mamba, norm in self.layers:
+            # Apply the MambaBlock and normalize the
+            # output plus the residual connection
+            seq = mamba(norm(seq)) + seq
+            
+        return seq
         
 class MambaBlock(nn.Module):
     '''
@@ -33,7 +80,18 @@ class MambaBlock(nn.Module):
         d_state : int = 16,
         d_discr : int | None = None,
         ker_size : int = 4,
+        parallel : bool = False,
     ) -> None:
+        '''Initialize the Mamba model.
+
+        Args:
+            d_input (int): The dimension of the input sequence.
+            d_model (int): The dimension of the model state space.
+            d_state (int, optional): The dimension of the state space in the SSM stage. Defaults to 16.
+            d_discr (int | None, optional): The dimension of the discrete space in the SSM stage. Defaults to None.
+            ker_size (int, optional): The kernel size for the convolutional layer. Defaults to 4.
+            parallel (bool, optional): Whether to use parallel scan for the SSM stage. Defaults to False.
+        '''
         super().__init__()
         
         d_discr = default(d_discr, d_model // 16)
@@ -41,11 +99,11 @@ class MambaBlock(nn.Module):
         # Projection matrices from the input sequence space to the
         # model state space (of dimension d_model) and back.
         # NOTE: The in_proj matrix has a factor of 2 because it is
-        #       use to split the input sequence into two branches
+        #       used to split the input sequence into two branches
         self.in_proj  = nn.Linear(d_input, 2 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_input, bias=False)
         
-        # Projection matrices for  endowing the SSM stage with
+        # Projection matrices for endowing the SSM stage with
         # context-dependent capability (i.e. input dependence)
         self.s_B = nn.Linear(d_model, d_state, bias=False)
         self.s_C = nn.Linear(d_model, d_state, bias=False)
@@ -53,7 +111,6 @@ class MambaBlock(nn.Module):
             nn.Linear(d_model, d_discr, bias=False), # Fixing matrix rank to d_disc
             nn.Linear(d_discr, d_model, bias=False),
         )
-        
         
         self.conv = nn.Conv1d(
             in_channels=d_model,
@@ -67,6 +124,9 @@ class MambaBlock(nn.Module):
         # Parameters for the SSM. Follows the S4 initialization
         self.A = nn.Parameter(torch.arange(1, d_state + 1).repeat(d_model, 1))
         self.D = nn.Parameter(torch.ones(d_model))
+        
+        # Whether to use or not the parallel scan for the SSM
+        self.parallel = parallel
         
     def forward(self, seq : Tensor) -> Tensor:
         '''
@@ -130,9 +190,94 @@ class MambaBlock(nn.Module):
         
         X = einsum(B_bar, seq, 'b l d s, b l d -> b l d s')
         
-        # Compute the state sequence
-        raise NotImplementedError('SSM computation not implemented yet')
+        # Compute the state space hidden states
+        # NOTE: This can be done either sequentially (slow) or with
+        # a parallel scan (fast)
+        hid = self._hid_states(A_bar, X, parallel=self.parallel)
+    
+        # Compute the output based on the hidden states
+        out = einsum(hid, C, 'b l d s, b l s -> b l d 1')
     
         out = out + D * seq
         
         return out
+    
+    def _hid_states(
+        self,
+        A_bar   : Tensor,
+        X       : Tensor,
+        parallel: bool = False,
+    ) -> Tensor:
+        '''
+        Calculate the hidden states of the SSM.
+
+        Args:
+            A_bar (Tensor): The tensor representing A_bar.
+            X (Tensor): The tensor representing X.
+            parallel (bool): Whether to use parallel scan or not.
+
+        Returns:
+            Tensor: The tensor representing the hidden states.
+        '''
+        if parallel:
+            return self._hid_states_par(A_bar, X)
+        else:
+            return self._hid_states_seq(A_bar, X)
+    
+    def _hid_states_par(
+            self,
+            A_bar : Tensor,
+            X     : Tensor,
+        ) -> Tensor:
+        '''Calculate the hidden states in parallel.
+
+        This method calculates the hidden states in parallel
+        (via pscan algorithm) a using the given input tensors.
+
+        Args:
+            A_bar (Tensor): The tensor representing A_bar.
+            X (Tensor): The tensor representing X.
+
+        Returns:
+            Tensor: The tensor representing the calculated hidden states.
+        '''
+        raise NotImplementedError('Parallel scan not implemented yet.')
+    
+    def _hid_states_seq(
+            self,
+            A_bar : Tensor,
+            X     : Tensor,
+        ) -> Tensor:
+        '''
+        Calculate the hidden states.
+
+        Args:
+            A_bar (Tensor): The A_bar tensor.
+            X (Tensor): The X tensor.
+
+        Returns:
+            Tensor: The hidden states tensor.
+        '''
+        b, l, d, s = A_bar.shape
+        
+        hs = [
+            torch.zeros(b, l, d, s, device=self.device),
+        ]
+        
+        for t in range(1, l):
+            hs.append(
+                A_bar[:, t] * hs[-1] + X[:, t]
+            )
+            
+        # Stuck the hidden states along the sequence length dimension
+        return torch.stack(hs, dim=1)
+
+    @property
+    def device(self) -> torch.device:
+        '''
+        Get the device of the model.
+
+        Returns:
+            torch.device: The device of the model.
+        '''
+        return next(self.parameters()).device
