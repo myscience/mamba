@@ -8,6 +8,7 @@ This repo contains the _unofficial_ PyTorch implementation of the `Mamba` model 
 from src import Mamba
 
 d_input = 16
+seq_len = 32
 batch_size = 4
 
 model = Mamba(
