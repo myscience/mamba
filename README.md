@@ -1,11 +1,13 @@
-# Mamba Model in Easy Pytorch
+# Mamba Model in Easy Pytorch 🐍
 
 This repo contains the _unofficial_ PyTorch implementation of the `Mamba` model as introduced in [Gu & Dao (2023)](https://arxiv.org/abs/2312.00752). One can find the official (CUDA) implementation [here](https://github.com/state-spaces/mamba) or the nice [alxndrTL](https://github.com/alxndrTL/mamba.py) alternative Python implementation. This repo is developed mainly for didactic purposes to spell out the details of a `State Space Models`.
 
 # Usage
 
+The basic usage is to instantiate a `Mamba` model and run it on the input of choice. The model expects the input tensor to have shape `(batch_size, seq_len, d_input)` and outputs a similarly shaped tensor.
+
 ```python
-from src import Mamba
+from mamba import Mamba
 
 d_input = 16
 seq_len = 32
@@ -25,14 +27,13 @@ model = Mamba(
 inp = torch.randn(batch_size, seq_len, d_input)
 
 # Compute the output using the Mamba architecture
-out = model(inp)
-
+out = model(inp) # (batch_size, seq_len, d_input)
 ```
 
 # Roadmap
 
 - [x] Put all the essential pieces together
-- [ ] Add functioning parallel implementation (p-scan)
+- [x] Add functioning parallel implementation (p-scan) (🙏🏻 @ [Zeta Project](https://github.com/kyegomez/zeta/blob/be1c7e14d6c5a78f7d558ad919ec774a5f018042/zeta/nn/modules/p_scan.py) & [alxndrTL](https://github.com/alxndrTL/mamba.py/tree/main))
 - [ ] Add functioning training script (Lightning)
 - [ ] Show some results
 

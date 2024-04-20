@@ -9,6 +9,7 @@ from torch.nn.functional import softplus
 
 from utils import default
 from utils import RMSNorm
+from pscan import pscan
 
 class Mamba(nn.Module):
     '''
@@ -43,9 +44,11 @@ class Mamba(nn.Module):
         # A Mamba model is composed of a series of MambaBlocks interleaved
         # with normalization layers (e.g. RMSNorm)
         self.layers = nn.ModuleList([
-            (
-                MambaBlock(**mamba_par),
-                RMSNorm(d_model)
+            nn.ModuleList(
+                [
+                    MambaBlock(**mamba_par),
+                    RMSNorm(d_model)
+                ]
             )
             for _ in range(num_layers)
         ])
@@ -61,7 +64,7 @@ class Mamba(nn.Module):
             Tensor: Output sequence of shape (batch_size, seq_len, d_seq).
         '''
         
-        for mamba, norm in self.layers:
+        for mamba, norm in self.layers: # type: ignore
             # Apply the MambaBlock and normalize the
             # output plus the residual connection
             seq = mamba(norm(seq)) + seq
@@ -138,6 +141,7 @@ class MambaBlock(nn.Module):
         Returns:
             Tensor: Output sequence of shape (batch_size, seq_len, d_seq).
         '''
+        b, l, d = seq.shape
         
         # Project the input sequence from d_seq to d_model and into two
         # distinct branches, one for the SSM and the residual branch
@@ -150,7 +154,7 @@ class MambaBlock(nn.Module):
         # NOTE: We need to move the channel dimension to the second dimension
         #       for the convolution to work properly, hence the rearrange
         a = rearrange(a, 'b l d -> b d l')
-        a = self.conv(a)
+        a = self.conv(a)[..., :l] # Crop the output to the original length
         a = rearrange(a, 'b d l -> b l d')
         
         # Apply the SSM
@@ -196,7 +200,7 @@ class MambaBlock(nn.Module):
         hid = self._hid_states(A_bar, X, parallel=self.parallel)
     
         # Compute the output based on the hidden states
-        out = einsum(hid, C, 'b l d s, b l s -> b l d 1')
+        out = einsum(hid, C, 'b l d s, b l s -> b l d')
     
         out = out + D * seq
         
@@ -204,73 +208,33 @@ class MambaBlock(nn.Module):
     
     def _hid_states(
         self,
-        A_bar   : Tensor,
-        X       : Tensor,
+        A : Tensor,
+        X : Tensor,
         parallel: bool = False,
     ) -> Tensor:
         '''
         Calculate the hidden states of the SSM.
 
         Args:
-            A_bar (Tensor): The tensor representing A_bar.
+            A (Tensor): The tensor representing A_bar.
             X (Tensor): The tensor representing X.
-            parallel (bool): Whether to use parallel scan or not.
+            parallel (bool): Whether to use parallel scan or 
+                sequential computation (slower).
 
         Returns:
             Tensor: The tensor representing the hidden states.
         '''
-        if parallel:
-            return self._hid_states_par(A_bar, X)
-        else:
-            return self._hid_states_seq(A_bar, X)
-    
-    def _hid_states_par(
-            self,
-            A_bar : Tensor,
-            X     : Tensor,
-        ) -> Tensor:
-        '''Calculate the hidden states in parallel.
-
-        This method calculates the hidden states in parallel
-        (via pscan algorithm) a using the given input tensors.
-
-        Args:
-            A_bar (Tensor): The tensor representing A_bar.
-            X (Tensor): The tensor representing X.
-
-        Returns:
-            Tensor: The tensor representing the calculated hidden states.
-        '''
-        raise NotImplementedError('Parallel scan not implemented yet.')
-    
-    def _hid_states_seq(
-            self,
-            A_bar : Tensor,
-            X     : Tensor,
-        ) -> Tensor:
-        '''
-        Calculate the hidden states.
-
-        Args:
-            A_bar (Tensor): The A_bar tensor.
-            X (Tensor): The X tensor.
-
-        Returns:
-            Tensor: The hidden states tensor.
-        '''
-        b, l, d, s = A_bar.shape
+        b, l, d, s = A.shape
         
-        hs = [
-            torch.zeros(b, l, d, s, device=self.device),
-        ]
+        A = rearrange(A, 'b l d s -> l b d s')
+        X = rearrange(X, 'b l d s -> l b d s')
         
-        for t in range(1, l):
-            hs.append(
-                A_bar[:, t] * hs[-1] + X[:, t]
-            )
-            
-        # Stuck the hidden states along the sequence length dimension
-        return torch.stack(hs, dim=1)
+        h = None if parallel else torch.zeros(b, d, s, device=self.device)
+        
+        return pscan(A, X) if parallel else torch.stack([
+            h := A_t * h + X_t
+            for A_t, X_t in zip(A, X)
+        ], dim=-1)
 
     @property
     def device(self) -> torch.device:
