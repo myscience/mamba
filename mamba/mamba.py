@@ -7,9 +7,9 @@ from einops import rearrange
 from torch.nn.functional import silu
 from torch.nn.functional import softplus
 
-from utils import default
-from utils import RMSNorm
-from pscan import pscan
+from .utils import default
+from .utils import RMSNorm
+from .pscan import pscan
 
 class Mamba(nn.Module):
     '''
@@ -47,7 +47,7 @@ class Mamba(nn.Module):
             nn.ModuleList(
                 [
                     MambaBlock(**mamba_par),
-                    RMSNorm(d_model)
+                    RMSNorm(d_input)
                 ]
             )
             for _ in range(num_layers)
@@ -125,8 +125,8 @@ class MambaBlock(nn.Module):
         )
         
         # Parameters for the SSM. Follows the S4 initialization
-        self.A = nn.Parameter(torch.arange(1, d_state + 1).repeat(d_model, 1))
-        self.D = nn.Parameter(torch.ones(d_model))
+        self.A = nn.Parameter(torch.arange(1, d_state + 1, dtype=torch.float).repeat(d_model, 1))
+        self.D = nn.Parameter(torch.ones(d_model, dtype=torch.float))
         
         # Whether to use or not the parallel scan for the SSM
         self.parallel = parallel
@@ -198,6 +198,9 @@ class MambaBlock(nn.Module):
         # NOTE: This can be done either sequentially (slow) or with
         # a parallel scan (fast)
         hid = self._hid_states(A_bar, X, parallel=self.parallel)
+        
+        print(hid.shape)
+        print(C.shape)
     
         # Compute the output based on the hidden states
         out = einsum(hid, C, 'b l d s, b l s -> b l d')
@@ -234,7 +237,7 @@ class MambaBlock(nn.Module):
         return pscan(A, X) if parallel else torch.stack([
             h := A_t * h + X_t
             for A_t, X_t in zip(A, X)
-        ], dim=-1)
+        ], dim=1)
 
     @property
     def device(self) -> torch.device:

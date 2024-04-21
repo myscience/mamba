@@ -14,13 +14,13 @@ seq_len = 32
 batch_size = 4
 
 model = Mamba(
-  num_layers = 6,   # Number of layers of the full model
-  d_input = d_input # Dimension of each vector in the input sequence (i.e. token size)
-  d_model = 64,     # Dimension of the visible state space
-  d_state = 64,     # Dimension of the latent hidden states
-  d_discr = 16,     # Rank of the discretization matrix Δ
-  ker_size = 4,     # Kernel size of the convolution in the MambaBlock
-  parallel = False, # Whether to use the sequential or the parallel implementation
+  num_layers = 6,    # Number of layers of the full model
+  d_input = d_input, # Dimension of each vector in the input sequence (i.e. token size)
+  d_model = 64,      # Dimension of the visible state space
+  d_state = 64,      # Dimension of the latent hidden states
+  d_discr = 16,      # Rank of the discretization matrix Δ
+  ker_size = 4,      # Kernel size of the convolution in the MambaBlock
+  parallel = False,  # Whether to use the sequential or the parallel implementation
 )
 
 # Mockup input for example purposes
