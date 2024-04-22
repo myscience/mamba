@@ -11,6 +11,20 @@ Cache = Tuple[Tensor, Tensor] | None
 def default(var : T | None, val : D) -> T | D:
     return val if var is None else var
 
+def default_iterdata_worker_init(worker_id : int) -> None:
+    torch.manual_seed(torch.initial_seed() + worker_id)
+    worker_info = torch.utils.data.get_worker_info()
+    
+    dataset = worker_info.dataset
+    glob_start = dataset._start
+    glob_end   = dataset._end
+    
+    per_worker = int((glob_end - glob_start) / worker_info.num_workers)
+    worker_id = worker_info.id
+    
+    dataset._start = glob_start + worker_id * per_worker
+    dataset._end   = min(dataset._start + per_worker, glob_end)
+
 # This implementation of RMSNorm is taken directly from:
 # https://github.com/johnma2006/mamba-minimal/blob/master/model.py
 class RMSNorm(nn.Module):

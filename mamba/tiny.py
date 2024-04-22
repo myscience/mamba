@@ -2,14 +2,15 @@ import torch
 from os import path
 import torch.nn as nn
 from torch import Tensor
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset
+from torch.utils.data import get_worker_info
 
-from typing import Literal, Tuple
+from typing import Literal, Tuple, Generator
 from transformers import PreTrainedTokenizerBase
 
 from .data import LightningDataset
 
-class TinyStories(Dataset):
+class TinyStories(IterableDataset):
     
     def __init__(
         self,
@@ -17,24 +18,53 @@ class TinyStories(Dataset):
         tokenizer : PreTrainedTokenizerBase,
         max_length : int = 256,
         data_split : Literal['train', 'valid', 'test'] = 'train',
+        read_chunk : int = 1024,
     ) -> None:
         super().__init__()
         
-        # Tokenize the stories
         text_path = path.join(root, f'{data_split}.txt')
+        
         with open(text_path, 'r', encoding='utf-8') as f:
-            raw = f.read()
+            # Move the file pointer to the end of the file
+            f.seek(0, 2)
+            
+            # Get the current position of the file pointer, which is the file size
+            self.file_size = f.tell()
         
-        tokens = tokenizer.encode(raw, allowed_special={"<|endoftext|>"}) # type: ignore
+        self.tokenizer = tokenizer
+        self.read_chunk = read_chunk
+        self.max_length = max_length + 1
         
-        self.prev = torch.tensor(tokens    ).chunk(max_length)
-        self.next = torch.tensor(tokens[1:]).chunk(max_length)
+        self.tokens = []
+        self.stream = open(text_path, 'r', encoding='utf-8')
+        
+        self._start = 0
+        self._end   = len(self)
 
     def __len__(self) -> int:
-        return len(self.prev)
+        return self.file_size
+    
+    def __del__(self) -> None:
+        if hasattr(self, 'stream'): self.stream.close()
 
-    def __getitem__(self, index) -> Tuple[Tensor, Tensor]:
-        return self.prev[index], self.next[index]
+    def __iter__(self) -> Generator[Tuple[Tensor, Tensor], None, None]:
+        
+        self.stream.seek(self._start)
+        
+        while self.stream.tell() < self._end:
+            while len(self.tokens) < self.max_length:
+                self.tokens.extend(
+                    self.tokenizer.encode(
+                        self.stream.read(self.read_chunk)
+                    )
+                )
+            
+            tokens, self.tokens = self.tokens[:self.max_length], self.tokens[self.max_length:]
+            
+            prev = torch.tensor(tokens[:-1])
+            post = torch.tensor(tokens[+1:])
+            
+            yield prev, post
 
 class TinyStoriesLightning(LightningDataset):
     '''Lightning Dataset class for the Tiny Stories dataset. The Tiny

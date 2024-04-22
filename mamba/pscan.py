@@ -126,8 +126,8 @@ class PScan(Function):
         for _ in range(num_steps):
             T = Xv.size(2)
             
-            Av = Av[:, :, :T].view(b, d, T // 2, 2, -1)
-            Xv = Xv[:, :, :T].view(b, d, T // 2, 2, -1)
+            Av = Av[:, :, :T].reshape(b, d, T // 2, 2, -1)
+            Xv = Xv[:, :, :T].reshape(b, d, T // 2, 2, -1)
             
             Xv[:, :, :, 1].add_(Av[:, :, :, 1].mul(Xv[:, :, :, 0]))
             Av[:, :, :, 1].mul_(Av[:, :, :, 0])
@@ -146,8 +146,8 @@ class PScan(Function):
                 Xv[:, :, -1].add_(Av[:, :, -1].mul(Xv[:, :, -2]))
                 Av[:, :, -1].mul_(Av[:, :, -2])
 
-            Av = Av[:, :, :T].view(b, d, T // 2, 2, -1)
-            Xv = Xv[:, :, :T].view(b, d, T // 2, 2, -1)
+            Av = Av[:, :, :T].reshape(b, d, T // 2, 2, -1)
+            Xv = Xv[:, :, :T].reshape(b, d, T // 2, 2, -1)
 
             Xv[:, :, 1:, 0].add_(Av[:, :, 1:, 0].mul(Xv[:, :, :-1, 1]))
             Av[:, :, 1:, 0].mul_(Av[:, :, :-1, 1])

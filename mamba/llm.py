@@ -4,6 +4,7 @@ from lightning import LightningModule
 
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
+from einops import rearrange
 from torch.nn.functional import cross_entropy
 
 from .utils import Cache
@@ -62,7 +63,7 @@ class MambaLLM(LightningModule):
         # Needed embedding layer for mapping input tokens to the network
         self.embedding = nn.Embedding(
             num_embeddings=vocab_size,
-            embedding_dim=d_model
+            embedding_dim=d_input
         )
         
         # A Mamba model is composed of a series of MambaBlocks interleaved
@@ -78,7 +79,7 @@ class MambaLLM(LightningModule):
         ])
         
         # Prediction head to map the output of the Mamba model to the vocabulary
-        self.head = nn.Linear(d_model, vocab_size, bias=False)
+        self.head = nn.Linear(d_input, vocab_size, bias=False)
         
         self.save_hyperparameters()
         
@@ -88,7 +89,7 @@ class MambaLLM(LightningModule):
         
         Args:
             tok (Tensor): Input sequence of word tokens, has expected
-                shape: (batch_size, seq_len, vocab_size).
+                shape: (batch_size, seq_len).
             cache (Tensor, optional): Cache tensor to store the hidden states
                 of the model. Default is None.
             
@@ -110,12 +111,15 @@ class MambaLLM(LightningModule):
             
         return logits, cache
     
-    def compute_loss(self, prev : Tensor, next : Tensor) -> Tensor:
+    def compute_loss(self, prev : Tensor, post : Tensor) -> Tensor:
         # Compute model predictions for the previous tokens
         pred, _ = self(prev)
+
+        pred = rearrange(pred, 'b s v -> (b s) v')
+        post = rearrange(post, 'b s -> (b s)')
         
         # Compute the loss using the cross entropy loss
-        loss = cross_entropy(pred, next)
+        loss = cross_entropy(pred, post)
         
         return loss
     

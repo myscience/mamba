@@ -1,22 +1,29 @@
 import unittest
 
+
 import yaml
 import torch
+from os import path
 
 from transformers import AutoTokenizer
 
 from mamba import MambaLLM
 from mamba.tiny import TinyStoriesLightning
+from mamba.utils import default_iterdata_worker_init
+
+# Loading `local_settings.json` for custom local settings
+test_folder = path.dirname(path.abspath(__file__))
+local_settings = path.join(test_folder, '.local.yaml')
 
 class TestMambaLLM(unittest.TestCase):
     
     def test_llm_forward(self):
         
-        vocab_size = 32
+        vocab_size = 24
         num_layers = 6
         d_input = 16
         d_model = 64
-        d_state = 64
+        d_state = 42
         d_discr = 16
         seq_len = 32
         ker_size = 4
@@ -38,13 +45,20 @@ class TestMambaLLM(unittest.TestCase):
         tok = torch.randint(0, vocab_size, (batch_size, seq_len))
         
         # Compute the output using the Mamba architecture
-        out, _ = model(tok)
+        out, _ = model.forward(tok)
         
         self.assertEqual(out.shape, (batch_size, seq_len, vocab_size))
             
     def test_llm_dataloader(self):
         
-        vocab_size = 32
+        # Get the local path to tiny stories
+        with open(local_settings, 'r') as f:
+            root = yaml.safe_load(f)['tiny_stories_path']
+            
+        # Get an off-the-shelf tokenizer
+        tokenizer = AutoTokenizer.from_pretrained('openai-community/gpt2')
+        
+        vocab_size = tokenizer.vocab_size
         num_layers = 6
         d_input = 16
         d_model = 64
@@ -66,24 +80,22 @@ class TestMambaLLM(unittest.TestCase):
             parallel = parallel
         )
         
-        # Get the local path to tiny stories
-        with open('.local.yaml') as f:
-            root = yaml.safe_load(f)['tiny_stories_path']
-            
-        # Get an off-the-shelf tokenizer
-        tokenizer = AutoTokenizer.from_pretrained('openai-community/gpt2')
-        
         loader = TinyStoriesLightning(
             root,
             tokenizer,
             max_length=seq_len,
             batch_size=batch_size,
+            worker_init_fn=default_iterdata_worker_init,
         )
         
-        loader.prepare_data()
+        loader.setup(stage='fit')
         batch = next(iter(loader.train_dataloader()))
         
-        loss, _ = model(batch)
+        prev, post = batch
+        
+        logits, _ = model(prev)
+        
+        loss = model.compute_loss(prev, post)
         
         self.assertTrue((loss >= 0).all())
-        self.assertEqual(loss.shape, (batch_size, ))
+        self.assertEqual(logits.shape, (*prev.shape, vocab_size))
