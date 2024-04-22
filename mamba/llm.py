@@ -1,17 +1,21 @@
 import yaml
+import torch
 import torch.nn as nn
 from lightning import LightningModule
 
 from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from einops import rearrange
+from torch.nn.functional import pad
+from torch.nn.functional import softmax
 from torch.nn.functional import cross_entropy
+from transformers import PreTrainedTokenizerBase
 
 from .utils import Cache
 from .utils import RMSNorm
 from .mamba import MambaBlock
 
-from typing import Tuple
+from typing import List, Tuple
 
 class MambaLLM(LightningModule):
     '''
@@ -51,7 +55,7 @@ class MambaLLM(LightningModule):
     ) -> None:
         super().__init__()
         
-        mamba_par = {
+        self.mamba_par = {
             'd_input' : d_input,
             'd_model' : d_model,
             'd_state' : d_state,
@@ -71,7 +75,7 @@ class MambaLLM(LightningModule):
         self.llm = nn.ModuleList([
             nn.ModuleList(
                 [
-                    MambaBlock(**mamba_par),
+                    MambaBlock(**self.mamba_par),
                     RMSNorm(d_input)
                 ]
             )
@@ -99,6 +103,7 @@ class MambaLLM(LightningModule):
                 output shape is: (batch_size, seq_len, vocab_size).
         '''
         
+        tok = torch.atleast_2d(tok)
         seq = self.embedding(tok)
         
         for mamba, norm in self.llm: # type: ignore
@@ -110,6 +115,73 @@ class MambaLLM(LightningModule):
         logits = self.head(seq)
             
         return logits, cache
+    
+    @torch.no_grad()
+    def generate(
+        self,
+        prompt : str | List[str],
+        tokenizer : PreTrainedTokenizerBase, 
+        token_lim : int = 300,
+        use_top_k : int = 50,
+        temperature : float = 1.0,
+    ) -> List[str]:
+        self.eval()
+        
+        if isinstance(prompt, str):
+            prompt = [prompt]
+        
+        # Encode the prompt using the tokenizer
+        raw = [
+            tokenizer.encode(raw, return_tensors='pt')[0]
+            for raw in prompt
+        ]
+        
+        max_len = max(len(seq) for seq in raw)
+        
+        inp : Tensor = torch.stack([
+            pad(seq, pad=(max_len - len(seq), 0))
+            for seq in raw
+        ])
+        
+        batch_size, inp_len = inp.shape
+        vocab_size = tokenizer.vocab_size
+        
+        print(batch_size, inp_len)
+        
+        d_model, ker_size = self.mamba_par['d_model'], self.mamba_par['ker_size']
+        cache = (None, torch.zeros(batch_size, d_model, ker_size - 1, device=self.device))
+        
+        # Consume the prompt to get the hidden states
+        for tok in rearrange(inp, 'b s -> s b 1'):
+            logits, cache = self(tok, cache)
+        
+        # Start generating the output sequence until either the
+        # maximum token limit is reach or the model generates the
+        # <|endoftext|> token
+        num_tokes = 0
+        out, pred = [inp], tok
+        while num_tokes < token_lim:# and pred != tokenizer.eos_token_id:
+            logits, cache = self(pred, cache)
+            
+            # Get the token with the highest probability by zeroing out
+            # the probability of the lowest probability tokens
+            prob = softmax(logits[:, -1] / temperature, dim=-1)
+            idxs = prob.topk(k=vocab_size - use_top_k, largest=False, sorted=False).indices
+            prob.scatter_(dim=-1, index=idxs, src=torch.zeros_like(prob))
+            prob /= prob.sum(dim=-1, keepdim=True)
+            
+            # Sample the next token from the distribution modelled by the llm
+            pred = torch.multinomial(prob, num_samples=batch_size, replacement=True)
+            
+            # Append the token to the input sequence
+            out.append(pred)
+            
+            num_tokes += 1
+        
+        out = torch.cat(out, dim=-1)
+        print(out.shape)
+        
+        return [tokenizer.decode(raw) for raw in out]
     
     def compute_loss(self, prev : Tensor, post : Tensor) -> Tensor:
         # Compute model predictions for the previous tokens

@@ -159,6 +159,7 @@ class MambaBlock(nn.Module):
         # NOTE: We need to move the channel dimension to the second dimension
         #       for the convolution to work properly, hence the rearrange
         x = rearrange(a, 'b l d -> b d l')
+
         x = x if prev_inp is None else torch.cat((prev_inp, x), dim=-1)
         a = self.conv(x)[..., :l] # Crop the output to the original length
         a = rearrange(a, 'b d l -> b l d')
