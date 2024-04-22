@@ -69,8 +69,6 @@ class Mamba(nn.Module):
         for mamba, norm in self.layers: # type: ignore
             # Apply the MambaBlock and normalize the
             # output plus the residual connection
-            print(seq.shape)
-            if cache: print('Cache', cache[0].shape, cache[1].shape)
             out, cache = mamba(norm(seq), cache)
             seq = out + seq
             
@@ -219,8 +217,6 @@ class MambaBlock(nn.Module):
             prev_hid=prev_hid,    
         )
         
-        print('HID', hid.shape)
-    
         # Compute the output based on the hidden states
         out = einsum(hid, C, 'b l d s, b l s -> b l d')
     
