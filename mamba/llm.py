@@ -6,6 +6,7 @@ from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from torch.nn.functional import cross_entropy
 
+from .utils import Cache
 from .utils import RMSNorm
 from .mamba import MambaBlock
 
@@ -81,7 +82,7 @@ class MambaLLM(LightningModule):
         
         self.save_hyperparameters()
         
-    def forward(self, tok : Tensor, cache : Tensor | None = None) -> Tuple[Tensor, Tensor | None]:
+    def forward(self, tok : Tensor, cache : Cache = None) -> Tuple[Tensor, Cache]:
         '''
         Forward pass of the Mamba model.
         

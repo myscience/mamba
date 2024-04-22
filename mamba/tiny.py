@@ -5,6 +5,8 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from typing import Literal, Tuple
+from transformers import PreTrainedTokenizerBase
+
 from .data import LightningDataset
 
 class TinyStories(Dataset):
@@ -12,7 +14,7 @@ class TinyStories(Dataset):
     def __init__(
         self,
         root : str,
-        tokenizer : nn.Module,
+        tokenizer : PreTrainedTokenizerBase,
         max_length : int = 256,
         data_split : Literal['train', 'valid', 'test'] = 'train',
     ) -> None:
@@ -43,7 +45,7 @@ class TinyStoriesLightning(LightningDataset):
     def __init__(
         self,
         root : str,
-        tokenizer : nn.Module,
+        tokenizer : PreTrainedTokenizerBase,
         max_length : int = 256,
         **kwargs,    
     ) -> None:
