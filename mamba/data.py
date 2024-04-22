@@ -3,7 +3,7 @@ from abc import abstractmethod
 
 from torch import Tensor
 from torch.utils.data import DataLoader
-from pytorch_lightning import LightningDataModule
+from lightning import LightningDataModule
 
 from typing import List, Callable
 
