@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import TypeVar
+from typing import TypeVar, Tuple
 
 T = TypeVar('T')
 D = TypeVar('D')
+
+Cache = Tuple[Tensor, Tensor] | None
 
 def default(var : T | None, val : D) -> T | D:
     return val if var is None else var
@@ -42,7 +44,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(d_model))
 
-    def forward(self, x : Tensor) -> Tensor:
+    def forward(self, x : Tensor) -> Tensor:        
         output = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
         return output

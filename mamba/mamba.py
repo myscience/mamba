@@ -4,11 +4,13 @@ from torch import Tensor
 from einops import einsum
 from einops import rearrange
 
+from typing import Tuple
 from torch.nn.functional import silu
 from torch.nn.functional import softplus
 
 from .utils import default
 from .utils import RMSNorm
+from .utils import Cache
 from .pscan import pscan
 
 class Mamba(nn.Module):
@@ -53,7 +55,7 @@ class Mamba(nn.Module):
             for _ in range(num_layers)
         ])
         
-    def forward(self, seq : Tensor) -> Tensor:
+    def forward(self, seq : Tensor, cache : Cache = None) -> Tuple[Tensor, Cache]:
         '''
         Forward pass of the Mamba model.
         
@@ -67,9 +69,12 @@ class Mamba(nn.Module):
         for mamba, norm in self.layers: # type: ignore
             # Apply the MambaBlock and normalize the
             # output plus the residual connection
-            seq = mamba(norm(seq)) + seq
+            print(seq.shape)
+            if cache: print('Cache', cache[0].shape, cache[1].shape)
+            out, cache = mamba(norm(seq), cache)
+            seq = out + seq
             
-        return seq
+        return seq, cache
         
 class MambaBlock(nn.Module):
     '''
@@ -131,7 +136,7 @@ class MambaBlock(nn.Module):
         # Whether to use or not the parallel scan for the SSM
         self.parallel = parallel
         
-    def forward(self, seq : Tensor) -> Tensor:
+    def forward(self, seq : Tensor, cache : Cache = None) -> Tuple[Tensor, Cache]:
         '''
         Forward pass of the MambaBlock.
         
@@ -143,6 +148,8 @@ class MambaBlock(nn.Module):
         '''
         b, l, d = seq.shape
         
+        (prev_hid, prev_inp) = default(cache, (None, None))
+        
         # Project the input sequence from d_seq to d_model and into two
         # distinct branches, one for the SSM and the residual branch
         # (see Fig. 3 of the Mamba paper). The resulting shapes are:
@@ -153,23 +160,31 @@ class MambaBlock(nn.Module):
         # Apply the convolutional layer to the SSM branch
         # NOTE: We need to move the channel dimension to the second dimension
         #       for the convolution to work properly, hence the rearrange
-        a = rearrange(a, 'b l d -> b d l')
-        a = self.conv(a)[..., :l] # Crop the output to the original length
+        x = rearrange(a, 'b l d -> b d l')
+        x = x if prev_inp is None else torch.cat((prev_inp, x), dim=-1)
+        a = self.conv(x)[..., :l] # Crop the output to the original length
         a = rearrange(a, 'b d l -> b l d')
         
         # Apply the SSM
         a = silu(a)
-        a = self.ssm(a) 
+        a, hid = self.ssm(a, prev_hid=prev_hid) 
         
         # * The residual branch
         b = silu(b)
         
         # Combine the two branches
         out = a * b
+        out =  self.out_proj(out)
         
-        return self.out_proj(out)
+        # Update the cache for next call if provided
+        if cache:
+            # Drop the first element of the hidden input states and attach
+            # the newly computed results from the convolutions
+            cache = (hid.squeeze(), x[..., 1:]) # type: ignore
+        
+        return out, cache
     
-    def ssm(self, seq : Tensor) -> Tensor:
+    def ssm(self, seq : Tensor, prev_hid : Tensor | None) -> Tuple[Tensor, Tensor]:
         '''
         State Space Model (SSM) of the MambaBlock.
         
@@ -192,28 +207,33 @@ class MambaBlock(nn.Module):
         A_bar = einsum(torch.exp(A), Δ, 'd s,   b l d -> b l d s')
         B_bar = einsum(          B,  Δ, 'b l s, b l d -> b l d s')
         
-        X = einsum(B_bar, seq, 'b l d s, b l d -> b l d s')
+        X_bar = einsum(B_bar, seq, 'b l d s, b l d -> b l d s')
         
         # Compute the state space hidden states
         # NOTE: This can be done either sequentially (slow) or with
         # a parallel scan (fast)
-        hid = self._hid_states(A_bar, X, parallel=self.parallel)
+        hid = self._hid_states(
+            A_bar,
+            X_bar,
+            parallel=self.parallel,
+            prev_hid=prev_hid,    
+        )
         
-        print(hid.shape)
-        print(C.shape)
+        print('HID', hid.shape)
     
         # Compute the output based on the hidden states
         out = einsum(hid, C, 'b l d s, b l s -> b l d')
     
         out = out + D * seq
         
-        return out
+        return out, hid
     
     def _hid_states(
         self,
         A : Tensor,
         X : Tensor,
-        parallel: bool = False,
+        parallel : bool = False,
+        prev_hid : Tensor | None = None,
     ) -> Tensor:
         '''
         Calculate the hidden states of the SSM.
@@ -231,6 +251,12 @@ class MambaBlock(nn.Module):
         
         A = rearrange(A, 'b l d s -> l b d s')
         X = rearrange(X, 'b l d s -> l b d s')
+        
+        if prev_hid is not None:
+            # If we have a previous hidden state it means we are running the
+            # efficient auto-regressive inference, so we expect both A and X
+            # to have a trivial length of 1, we just drop it when returning
+            return rearrange(A * prev_hid + X, 'l b d s -> b l d s')
         
         h = None if parallel else torch.zeros(b, d, s, device=self.device)
         
