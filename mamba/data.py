@@ -16,7 +16,7 @@ class LightningDataset(LightningDataModule):
     '''
     
     @classmethod
-    def from_conf(cls, conf_path : str, key : str = 'DATASET') -> 'LightningDataset':
+    def from_config(cls, conf_path : str, *args, key : str = 'dataset') -> 'LightningDataset':
         '''
         Construct a Lightning DataModule from a configuration file.
         '''
@@ -27,11 +27,13 @@ class LightningDataset(LightningDataModule):
         data_conf = conf[key]
 
         return cls(
+            *args,
             **data_conf,
         )
 
     def __init__(
         self,
+        *args,
         batch_size : int = 16,
         num_workers : int = 0,
         train_shuffle : bool | None = None,

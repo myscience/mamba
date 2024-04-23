@@ -72,8 +72,8 @@ class TinyStoriesLightning(LightningDataset):
     
     def __init__(
         self,
-        root : str,
         tokenizer : PreTrainedTokenizerBase,
+        root : str = './',
         max_length : int = 256,
         **kwargs,    
     ) -> None:

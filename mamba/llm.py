@@ -28,7 +28,7 @@ class MambaLLM(LightningModule):
     '''
     
     @classmethod
-    def from_config(cls, conf_path : str, key : str | None = 'LLM') -> 'MambaLLM':
+    def from_config(cls, conf_path : str, key : str | None = 'llm') -> 'MambaLLM':
         '''
         Construct a MambaLLM from a configuration file.
         '''
@@ -52,8 +52,11 @@ class MambaLLM(LightningModule):
         d_discr : int | None = None,
         ker_size : int = 4,
         parallel : bool = False,
+        **kwargs,
     ) -> None:
         super().__init__()
+        
+        self.inference_kw = kwargs
         
         self.mamba_par = {
             'd_input' : d_input,
@@ -226,6 +229,32 @@ class MambaLLM(LightningModule):
         )
         
         return loss
+    
+    def on_validation_end(self) -> None:
+        
+        inference_kw = {
+            'prompt' : 'Once upon a time',
+            'tokenizer' : self.tokenizer,
+            **self.inference_kw
+        }
+        
+        # Generate the model output on the given prompt
+        output = list( # List needed to consume the generator
+            self.generate(
+                **inference_kw
+            )
+        )
+        
+        # Assemble the outputs based on the batch id
+        pids = list(output[0].keys())
+        output = {pid : ''.join([out[pid] for out in output]) for pid in pids}
+        
+        for pid, text in output.items():
+            self.logger.experiment.add_text({
+                    f'Prompt {pid}' : text
+                },
+                global_step=self.global_step,
+            )
     
     def configure_optimizers(self) -> Optimizer:
         optim = AdamW(
