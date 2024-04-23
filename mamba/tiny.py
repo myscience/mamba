@@ -1,9 +1,7 @@
 import torch
 from os import path
-import torch.nn as nn
 from torch import Tensor
 from torch.utils.data import IterableDataset
-from torch.utils.data import get_worker_info
 
 from typing import Literal, Tuple, Generator
 from transformers import PreTrainedTokenizerBase

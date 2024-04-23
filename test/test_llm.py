@@ -104,13 +104,14 @@ class TestMambaLLM(unittest.TestCase):
         # Get an off-the-shelf tokenizer
         tokenizer = AutoTokenizer.from_pretrained('openai-community/gpt2')
         
-        vocab_size = tokenizer.vocab_size
+        tokenizer.add_special_tokens({'pad_token': '<|pad|>'})
+        
+        vocab_size = tokenizer.vocab_size + 1
         num_layers = 6
         d_input = 16
         d_model = 64
         d_state = 64
         d_discr = 16
-        seq_len = 32
         ker_size = 4
         parallel = True
         token_lim = 16
@@ -136,6 +137,7 @@ class TestMambaLLM(unittest.TestCase):
             token_lim=token_lim,
         )
         
-        print(gen)
+        for tok in gen:
+            print(tok[0], end='')
         
         self.assertTrue(True)

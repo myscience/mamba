@@ -5,7 +5,7 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 from lightning import LightningDataModule
 
-from typing import List, Callable
+from typing import Callable
 
 from .utils import default
 

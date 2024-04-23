@@ -15,7 +15,7 @@ from .utils import Cache
 from .utils import RMSNorm
 from .mamba import MambaBlock
 
-from typing import List, Tuple
+from typing import List, Tuple, Generator
 
 class MambaLLM(LightningModule):
     '''
@@ -124,29 +124,23 @@ class MambaLLM(LightningModule):
         token_lim : int = 300,
         use_top_k : int = 50,
         temperature : float = 1.0,
-    ) -> List[str]:
+    ) -> Generator[str, None, None]:
+        # Set model in evaluation model for inference
         self.eval()
         
         if isinstance(prompt, str):
             prompt = [prompt]
         
         # Encode the prompt using the tokenizer
-        raw = [
-            tokenizer.encode(raw, return_tensors='pt')[0]
-            for raw in prompt
-        ]
-        
-        max_len = max(len(seq) for seq in raw)
-        
-        inp : Tensor = torch.stack([
-            pad(seq, pad=(max_len - len(seq), 0))
-            for seq in raw
-        ])
+        inp = tokenizer(
+            prompt,
+            return_tensors='pt',
+            padding=True,
+            truncation=True,
+        ).input_ids
         
         batch_size, inp_len = inp.shape
         vocab_size = tokenizer.vocab_size
-        
-        print(batch_size, inp_len)
         
         d_model, ker_size = self.mamba_par['d_model'], self.mamba_par['ker_size']
         cache = (None, torch.zeros(batch_size, d_model, ker_size - 1, device=self.device))
@@ -155,12 +149,15 @@ class MambaLLM(LightningModule):
         for tok in rearrange(inp, 'b s -> s b 1'):
             logits, cache = self(tok, cache)
         
-        # Start generating the output sequence until either the
-        # maximum token limit is reach or the model generates the
-        # <|endoftext|> token
+        # Start generating the output sequence until either the maximum
+        # token limit is reach or the model generates the<|endoftext|> token
         num_tokes = 0
         out, pred = [inp], tok
-        while num_tokes < token_lim:# and pred != tokenizer.eos_token_id:
+        pidx = torch.arange(batch_size)
+        
+        yield {pid.item() : tokenizer.decode(raw, skip_special_tokens=True) for pid, raw in zip(pidx, inp)}
+        
+        while num_tokes < token_lim and len(pred):
             logits, cache = self(pred, cache)
             
             # Get the token with the highest probability by zeroing out
@@ -171,17 +168,24 @@ class MambaLLM(LightningModule):
             prob /= prob.sum(dim=-1, keepdim=True)
             
             # Sample the next token from the distribution modelled by the llm
-            pred = torch.multinomial(prob, num_samples=batch_size, replacement=True)
+            pred = torch.multinomial(prob, num_samples=1, replacement=True)
             
             # Append the token to the input sequence
             out.append(pred)
             
             num_tokes += 1
+            
+            # Drop from the batch every prediction that reached the <|endoftext|> token
+            mask = pred.squeeze() != tokenizer.eos_token_id
+            
+            pred  = pred[mask]
+            pidx  = pidx[mask]
+            cache = (cache[0][mask], cache[1][mask])
+            
+            # Yield the decoded tokens
+            yield {pid.item() : tokenizer.decode(raw, skip_special_tokens=True) for pid, raw in zip(pidx, pred)}
         
-        out = torch.cat(out, dim=-1)
-        print(out.shape)
-        
-        return [tokenizer.decode(raw) for raw in out]
+        self.train()
     
     def compute_loss(self, prev : Tensor, post : Tensor) -> Tensor:
         # Compute model predictions for the previous tokens
