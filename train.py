@@ -43,7 +43,7 @@ def main(args : Namespace):
         'callbacks' : callbk,
     }
     trainer_conf.pop('config')
-    trainer = Trainer.from_conf(trainer_conf)
+    trainer = Trainer(**trainer_conf)
     
     # Train the model
     trainer.fit(model, dataset, ckpt_path=config['misc']['resume'])
@@ -60,7 +60,7 @@ if __name__ == '__main__':
         help='Path to the training configuration file.',
     )
     
-    parser = Trainer.add_argparse_args(parser)
+    parser = Trainer.add_argparse_args(parser) # type: ignore
     
     args = parser.parse_args()
     

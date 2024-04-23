@@ -3,6 +3,8 @@ import torch.nn as nn
 from torch import Tensor
 from typing import TypeVar, Tuple
 
+from torch.utils.data import get_worker_info
+
 T = TypeVar('T')
 D = TypeVar('D')
 
@@ -13,17 +15,19 @@ def default(var : T | None, val : D) -> T | D:
 
 def default_iterdata_worker_init(worker_id : int) -> None:
     torch.manual_seed(torch.initial_seed() + worker_id)
-    worker_info = torch.utils.data.get_worker_info()
+    worker_info = get_worker_info()
+    
+    if worker_info is None: return
     
     dataset = worker_info.dataset
-    glob_start = dataset._start
-    glob_end   = dataset._end
+    glob_start = dataset._start # type: ignore
+    glob_end   = dataset._end   # type: ignore
     
     per_worker = int((glob_end - glob_start) / worker_info.num_workers)
     worker_id = worker_info.id
     
-    dataset._start = glob_start + worker_id * per_worker
-    dataset._end   = min(dataset._start + per_worker, glob_end)
+    dataset._start = glob_start + worker_id * per_worker        # type: ignore 
+    dataset._end   = min(dataset._start + per_worker, glob_end) # type: ignore
 
 # This implementation of RMSNorm is taken directly from:
 # https://github.com/johnma2006/mamba-minimal/blob/master/model.py

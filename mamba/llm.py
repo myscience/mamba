@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from lightning import LightningModule
 
-from torch import Tensor
+from torch import Tensor, NumberType
 from torch.optim import AdamW, Optimizer
 from einops import rearrange
 from torch.nn.functional import pad
@@ -15,7 +15,7 @@ from .utils import Cache
 from .utils import RMSNorm
 from .mamba import MambaBlock
 
-from typing import List, Tuple, Generator
+from typing import Dict, List, Tuple, Generator
 
 class MambaLLM(LightningModule):
     '''
@@ -127,7 +127,7 @@ class MambaLLM(LightningModule):
         token_lim : int = 300,
         use_top_k : int = 50,
         temperature : float = 1.0,
-    ) -> Generator[str, None, None]:
+    ) -> Generator[Dict[int, str], None, None]:
         # Set model in evaluation model for inference
         self.eval()
         
@@ -143,7 +143,7 @@ class MambaLLM(LightningModule):
         ).input_ids
         
         batch_size, inp_len = inp.shape
-        vocab_size = tokenizer.vocab_size
+        vocab_size = tokenizer.vocab_size # type: ignore
         
         d_model, ker_size = self.mamba_par['d_model'], self.mamba_par['ker_size']
         cache = (None, torch.zeros(batch_size, d_model, ker_size - 1, device=self.device))
@@ -158,7 +158,7 @@ class MambaLLM(LightningModule):
         out, pred = [inp], tok
         pidx = torch.arange(batch_size)
         
-        yield {pid.item() : tokenizer.decode(raw, skip_special_tokens=True) for pid, raw in zip(pidx, inp)}
+        yield {int(pid) : tokenizer.decode(raw, skip_special_tokens=True) for pid, raw in zip(pidx, inp)}
         
         while num_tokes < token_lim and len(pred):
             logits, cache = self(pred, cache)
@@ -186,7 +186,7 @@ class MambaLLM(LightningModule):
             cache = (cache[0][mask], cache[1][mask])
             
             # Yield the decoded tokens
-            yield {pid.item() : tokenizer.decode(raw, skip_special_tokens=True) for pid, raw in zip(pidx, pred)}
+            yield {int(pid) : tokenizer.decode(raw, skip_special_tokens=True) for pid, raw in zip(pidx, pred)}
         
         self.train()
     
@@ -250,7 +250,7 @@ class MambaLLM(LightningModule):
         output = {pid : ''.join([out[pid] for out in output]) for pid in pids}
         
         for pid, text in output.items():
-            self.logger.experiment.add_text({
+            self.logger.experiment.add_text({ # type: ignore
                     f'Prompt {pid}' : text
                 },
                 global_step=self.global_step,
